@@ -1,6 +1,7 @@
 from fastapi import FastAPI, Query
 import httpx
 import re
+import json
 
 app = FastAPI()
 
@@ -15,42 +16,40 @@ def home():
     return {"status": "ok", "message": "Animecix Extractor Calisiyor"}
 
 @app.get("/extract")
-async def extract_tau(url: str = Query(..., description="Animecix Bolum URL'si")):
+async def extract_tau(url: str = Query(..., description="Animecix URL'si")):
     found_links = set()
     
+    # URL'den sadece Title ID'yi çek (Örn: /titles/7511 -> 7511)
     title_match = re.search(r'/titles/(\d+)', url)
-    season_match = re.search(r'/season/(\d+)', url)
-    episode_match = re.search(r'/episode/(\d+)', url)
-
-    if not title_match or not episode_match:
-        return {"status": "error", "message": "Gecerli bir URL girilmedi", "links": []}
+    if not title_match:
+        return {"status": "error", "message": "Gecerli Title ID bulunamadi", "links": []}
 
     title_id = title_match.group(1)
-    season_num = season_match.group(1) if season_match else "1"
-    episode_num = episode_match.group(1)
-
-    # Animecix'in dahili API adresi
-    api_url = f"https://animecix.tv/secure/titles/{title_id}?seasonNumber={season_num}"
+    
+    # Animecix'in tum bolum ve video verilerini veren ana API ucu
+    api_url = f"https://animecix.tv/secure/titles/{title_id}"
 
     try:
-        async with httpx.AsyncClient(headers=HEADERS, follow_redirects=True, timeout=20.0) as client:
+        async with httpx.AsyncClient(headers=HEADERS, follow_redirects=True, timeout=25.0) as client:
             res = await client.get(api_url)
             
             if res.status_code == 200:
                 raw_text = res.text
                 
-                # 1. Metin icindeki dogrudan Tau/Takurox/Sibnet/Vidmoly URL'lerini yakala
+                # 1. Metin icindeki dogrudan Tau / Takurox / CDN iframe URL'lerini cımbızla
                 direct_urls = re.findall(r'https?://[^\s"\']*(?:tau-video|takurox|sibnet|vidmoly)[^\s"\']*', raw_text)
                 for u in direct_urls:
-                    found_links.add(u.replace("\\", ""))
+                    # JSON kacıs karakterlerini (\/) temizle
+                    clean_u = u.replace("\\", "").rstrip('",;')
+                    found_links.add(clean_u)
 
-                # 2. Metin icindeki 24 haneli Tau embed ID'lerini yakala
+                # 2. Metin icindeki 24 haneli Tau ID'lerini yakala ve embed URL yap
                 tau_ids = re.findall(r'[a-f0-9]{24}', raw_text)
                 for t_id in tau_ids:
                     found_links.add(f"https://tau-video.xyz/embed/{t_id}")
 
             else:
-                return {"status": "error", "message": f"API HTTP {res.status_code}", "links": []}
+                return {"status": "error", "message": f"Animecix API HTTP {res.status_code}", "links": []}
 
     except Exception as e:
         return {"status": "error", "message": str(e), "links": []}
@@ -58,7 +57,7 @@ async def extract_tau(url: str = Query(..., description="Animecix Bolum URL'si")
     clean_links = list(found_links)
     return {
         "status": "success" if clean_links else "error",
-        "url": url,
+        "title_id": title_id,
         "count": len(clean_links),
         "links": clean_links
     }
