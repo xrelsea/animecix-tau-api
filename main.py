@@ -1,7 +1,6 @@
 from fastapi import FastAPI, Query
 import httpx
 import re
-import json
 
 app = FastAPI()
 
@@ -19,7 +18,6 @@ def home():
 async def extract_tau(url: str = Query(..., description="Animecix Bolum URL'si")):
     found_links = set()
     
-    # URL'den ID, Sezon ve Bölüm bilgilerini ayrıştır
     title_match = re.search(r'/titles/(\d+)', url)
     season_match = re.search(r'/season/(\d+)', url)
     episode_match = re.search(r'/episode/(\d+)', url)
@@ -38,24 +36,18 @@ async def extract_tau(url: str = Query(..., description="Animecix Bolum URL'si")
             res = await client.get(api_url)
             
             if res.status_code == 200:
-                api_data = res.json()
-                title_obj = api_data.get("title", {}) if isinstance(api_data, dict) and "title" in api_data else api_data
-                videos = title_obj.get("videos", []) or api_data.get("videos", []) or api_data.get("episodes", [])
+                raw_text = res.text
+                
+                # 1. Metin içindeki doğrudan Tau/Takurox/Sibnet/CDN URL'lerini yakala
+                direct_urls = re.findall(r'https?://[^\s"\']*(?:tau-video|takurox|sibnet|vidmoly)[^\s"\']*', raw_text)
+                for u in direct_urls:
+                    found_links.add(u.replace("\\", ""))
 
-                for vid in videos:
-                    ep_no = str(vid.get("number") or vid.get("episodeNumber") or vid.get("name") or "")
-                    if str(episode_num) == ep_no or f"{episode_num}." in ep_no or ep_no == f"{episode_num}":
-                        vid_str = json.dumps(vid)
-                        
-                        # Tau-video / Takurox yönlendirmeleri
-                        tau_urls = re.findall(r'https?://[^\s"\']*(?:tau-video|takurox)[^\s"\']*', vid_str)
-                        for u in tau_urls:
-                            found_links.add(u.replace("\\", ""))
-                        
-                        # Tau ID'leri
-                        tau_ids = re.findall(r'[a-f0-9]{24}', vid_str)
-                        for t_id in tau_ids:
-                            found_links.add(f"https://tau-video.xyz/embed/{t_id}")
+                # 2. Metin içindeki 24 haneli Tau embed ID'lerini yakala
+                tau_ids = re.findall(r'[a-f0-9]{24}', raw_text)
+                for t_id in tau_ids:
+                    found_links.add(f"https://tau-video.xyz/embed/{t_id}")
+
             else:
                 return {"status": "error", "message": f"API HTTP {res.status_code}", "links": []}
 
